@@ -1248,6 +1248,24 @@ static const struct qmi_elem_info qmi_wlanfw_bdf_download_resp_msg_v01_ei[] = {
 		.ei_array	= qmi_response_type_v01_ei,
 	},
 	{
+		.data_type	= QMI_OPT_FLAG,
+		.elem_len	= 1,
+		.elem_size	= sizeof(u8),
+		.array_type	= NO_ARRAY,
+		.tlv_type	= 0x10,
+		.offset		= offsetof(struct qmi_wlanfw_bdf_download_resp_msg_v01,
+					   host_bdf_data_valid),
+	},
+	{
+		.data_type	= QMI_UNSIGNED_8_BYTE,
+		.elem_len	= 1,
+		.elem_size	= sizeof(u64),
+		.array_type	= NO_ARRAY,
+		.tlv_type	= 0x10,
+		.offset		= offsetof(struct qmi_wlanfw_bdf_download_resp_msg_v01,
+					   host_bdf_data),
+	},
+	{
 		.data_type	= QMI_EOTI,
 		.array_type	= NO_ARRAY,
 		.tlv_type	= QMI_COMMON_TLV_TYPE,
@@ -2399,6 +2417,19 @@ static int ath11k_qmi_load_file_target_mem(struct ath11k_base *ab,
 				   remaining);
 		}
 	}
+
+	/*
+	 * The firmware answers the BDF download with what the board data says
+	 * about the RF front end. Only the external-PA bit is decoded here; the
+	 * point of printing it is that its absence means the chip drives its own
+	 * internal PA, which on QCA6490 needs a rail the host must keep up --
+	 * see QMI_WLANFW_HW_XPA in qmi.h.
+	 */
+	if (resp.host_bdf_data_valid)
+		ath11k_info(ab, "qmi host_bdf_data 0x%llx: %s power amplifier\n",
+			    resp.host_bdf_data,
+			    (resp.host_bdf_data & QMI_WLANFW_HW_XPA) ?
+			    "external" : "internal");
 
 err_iounmap:
 	if (ab->hw_params.fixed_bdf_addr)

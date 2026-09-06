@@ -5009,6 +5009,27 @@ skip_serdes_start:
 		goto err_disable_pipe_clk;
 	}
 
+	/*
+	 * Hand the GCC pipe clock over from the reference source to this PHY, now
+	 * that its pipe clock is actually running.
+	 *
+	 * The GCC branch's parent is a clk_regmap_phy_mux, and since commit
+	 * e108373c54fb ("clk: qcom: regmap-phy-mux: Rework the implementation")
+	 * that mux is only ever moved by a rate request -- ULONG_MAX picks the PHY,
+	 * 19.2 MHz picks the reference -- where before it followed the branch's
+	 * enable state. The branch carries CLK_SET_RATE_PARENT so the request
+	 * propagates, but nothing in the tree issues it, so the mux keeps whatever
+	 * the bootloader left. On a OnePlus 9RT that is REF_SRC: the controller's
+	 * PIPE interface runs off XO, and the DWC LTSSM sits in Detect with
+	 * link_up=0 and in_training=0 while both PARF_LTSSM and PORT_DEBUG0 read
+	 * a state that never advances.
+	 *
+	 * Best effort: on platforms whose pipe clock has no phy_mux in its parent
+	 * chain the rate request is rejected, and that is fine -- there is nothing
+	 * to switch there.
+	 */
+	clk_set_rate(qmp->pipe_clks[0].clk, ULONG_MAX);
+
 	return 0;
 
 err_disable_pipe_clk:

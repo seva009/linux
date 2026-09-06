@@ -435,8 +435,19 @@ struct qmi_wlanfw_bdf_download_req_msg_v01 {
 
 };
 
+/* Board capability bits the firmware reports back in the BDF download
+ * response. QMI_WLANFW_HW_XPA means the board data describes an external
+ * power amplifier; when it is clear the chip uses its own internal PA, and
+ * on QCA6490 that PA needs a supply the host has to bring up (the downstream
+ * cnss driver calls cnss_enable_int_pow_amp_vreg() on exactly this
+ * condition, cnss2/qmi.c:826).
+ */
+#define QMI_WLANFW_HW_XPA			BIT_ULL(0)
+
 struct qmi_wlanfw_bdf_download_resp_msg_v01 {
 	struct qmi_response_type_v01 resp;
+	u8 host_bdf_data_valid;
+	u64 host_bdf_data;
 };
 
 #define QMI_WLANFW_M3_INFO_REQ_MSG_V01_MAX_MSG_LEN	18

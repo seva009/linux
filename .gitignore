@@ -194,3 +194,12 @@ sphinx_*/
 
 # bc language scripts (not LLVM bitcode)
 !kernel/time/timeconst.bc
+
+alpine-rootfs/
+debian-rootfs/
+android_kernel_oneplus_sm8350-lineage-23.2/
+martini/
+.claude/
+vmlinux
+*.img
+out/

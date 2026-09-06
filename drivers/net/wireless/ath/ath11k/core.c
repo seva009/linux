@@ -531,9 +531,25 @@ static const struct ath11k_hw_params ath11k_hw_params[] = {
 		.supports_shadow_regs = true,
 		.idle_ps = true,
 		.supports_sta_ps = true,
-		.coldboot_cal_mm = false,
+		/*
+		 * The QCA6490 firmware in this phone asserts in its PHY M3 shortly
+		 * after WMI_INIT if it is taken straight into mission mode. The
+		 * vendor stack never does that: martini's own cnss node carries
+		 * qcom,wlan-cbc-enabled (vendor_extracted.dts:13967), so cnss runs a
+		 * calibration-mode boot first and refuses to let the WLAN driver
+		 * attach until it finishes ("Reject WLAN Driver insmod before CBC",
+		 * cnss2/pci.c:2932). It then power-cycles the chip and enters mission
+		 * mode with cal_done set. Do the same: coldboot_cal_mm arms the
+		 * ATH11K_FIRMWARE_MODE_COLD_BOOT pass in ath11k_qmi_driver_event_work(),
+		 * and cbcal_restart_fw makes ath11k_qmi_fwreset_from_cold_boot() --
+		 * already called from ath11k_pci_probe() (pci.c:1159) -- do the reset,
+		 * after which the CALDB chunk is kept and only cal_done differs.
+		 *
+		 * Escape hatch without a rebuild: ath11k.cold_boot_cal=0.
+		 */
+		.coldboot_cal_mm = true,
 		.coldboot_cal_ftm = false,
-		.cbcal_restart_fw = false,
+		.cbcal_restart_fw = true,
 		.fw_mem_mode = 0,
 		.num_vdevs = 4,
 		.num_peers = 512,
@@ -2536,6 +2552,18 @@ static void ath11k_core_reset(struct work_struct *work)
 
 	if (!(test_bit(ATH11K_FLAG_REGISTERED, &ab->dev_flags))) {
 		ath11k_warn(ab, "ignore reset dev flags 0x%lx\n", ab->dev_flags);
+		/*
+		 * Bring-up debug: a firmware crash before ath11k_mac_register()
+		 * leaves nothing to look at. Recovery is rightly skipped here --
+		 * there is no registered hw to reconfigure -- but the RDDM image,
+		 * which is where the Q6 records why it asserted, is then never
+		 * read either, so the only evidence is the QMI timeout ten
+		 * seconds later. Pull the dump before returning; it is the same
+		 * call the registered path makes below and runs in the same
+		 * reset_work context, and by this point mhi_ctrl and the QMI
+		 * target_mem chunks it reads are all set up.
+		 */
+		ath11k_coredump_collect(ab);
 		return;
 	}
 

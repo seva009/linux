@@ -1,0 +1,1104 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * OnePlus 9RT (oneplus,martini / oplus project 20820), SM8350 "lahaina".
+ *
+ * Minimal mainline bring-up device tree:
+ *   - brings up the MDSS/DPU display pipeline on the Samsung AMS662ZS01 panel,
+ *     with the bootloader's continuous-splash framebuffer still described so
+ *     simpledrm carries the log until msm's KMS takes the aperture over
+ *     (aperture_remove_all_conflicting_devices(), msm_kms.c),
+ *   - reserves every firmware carve-out the vendor device tree reserves, with
+ *     the martini-specific overrides applied,
+ *   - sets up ramoops in the same region the vendor kernel uses, so the console
+ *     log can be recovered from Android after a reboot.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include "sm8350.dtsi"
+#include "pm8350.dtsi"
+#include "pm8350b.dtsi"
+#include "pm8350c.dtsi"
+
+/* Panel: 6.62" 1080x2400 AMOLED, single DSI. */
+#define MARTINI_FB_WIDTH	1080
+#define MARTINI_FB_HEIGHT	2400
+
+/ {
+	model = "OnePlus 9RT";
+	compatible = "oneplus,martini", "qcom,sm8350";
+	chassis-type = "handset";
+
+	/*
+	 * ABL matches this against the SoC ID it reads from SMEM before it
+	 * accepts a device tree. Copied verbatim from the root of the DTB the
+	 * bootloader actually handed to Android (/sys/firmware/fdt): SoC IDs
+	 * 415/456/501 at revision v2.1.
+	 *
+	 * qcom,board-id is deliberately absent. The vendor base DTB that ABL
+	 * accepted (androidboot.dtb_idx=0) carries no board-id either — that
+	 * property only lives in the dtbo overlays — and supplying one that
+	 * does not match the board ID in SMEM makes ABL reject the DTB outright.
+	 */
+	qcom,msm-id = <415 0x20001>, <456 0x20001>, <501 0x20001>;
+
+	/*
+	 * oplus's own addition to ABL's device tree selection: the project number
+	 * from SMEM, which ABL also passes on as androidboot.prjname=20820.
+	 * 0x5154 = 20820 = martini.
+	 *
+	 * Probably not actually required — the vendor base DTB ABL selected
+	 * (androidboot.dtb_idx=0) lists <0x4d71 0x4d67 0x5176 0x2085a>, which does
+	 * not contain 0x5154 at all, and had ABL been matching on this property it
+	 * would have picked entry 3 instead. But it costs nothing, it is the right
+	 * value for this device, and having it here means our tree differs from the
+	 * known-good vendor one in the *value* of this property rather than in
+	 * whether it exists — a distinction a patched selector could plausibly care
+	 * about, and one no other test we have would isolate.
+	 */
+	oplus,dtsi_no = <0x5154>;
+
+	aliases {
+		serial0 = &uart2;
+	};
+
+
+	wcn6855-pmu {
+		compatible = "qcom,wcn6855-pmu";        /* QCA6490 == WCN6855 */
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&wlan_en_state>, <&bt_en_state>;
+
+		wlan-enable-gpios = <&tlmm 64 GPIO_ACTIVE_HIGH>;
+		bt-enable-gpios = <&tlmm 65 GPIO_ACTIVE_HIGH>;
+		/*
+		 * No swctrl-gpios. The vendor tree has one (qcom,sw-ctrl-gpio =
+		 * <&tlmm 153>), but pwrseq-qcom-wcn never reads the property, and
+		 * gpio153 falls inside the <97 106> reserved range -- so the day a
+		 * kernel does start requesting it, msm_pinmux_request() would fail
+		 * the PMU probe with -EINVAL exactly the way gpio65 did. Unmask 153
+		 * first if it is ever needed.
+		 */
+
+		vddio-supply = <&vreg_s10b_1p8>;        /* vdd-wlan-io,   1.8 V   */
+		vddaon-supply = <&vreg_s11b_0p95>;      /* vdd-wlan-dig,  0.952 V */
+		vddpmucx-supply = <&vreg_s11b_0p95>;
+		vddrfa0p95-supply = <&vreg_s11b_0p95>;
+		vddpmumx-supply = <&vreg_s2e_aon>;      /* vdd-wlan-aon,  0.952 V */
+		vddpmu-supply = <&vreg_s12b_rfa2>;      /* vdd-wlan-rfa2, 1.35 V  */
+		vddrfa1p3-supply = <&vreg_s12b_rfa2>;
+		vddpcie1p3-supply = <&vreg_s12b_rfa2>;
+		vddrfa1p9-supply = <&vreg_s1c_1p86>;    /* vdd-wlan-rfa1, 1.88 V  */
+		vddpcie1p9-supply = <&vreg_s1c_1p86>;
+
+		/*
+		 * Внутренние LDO самого QCA6490. Драйвера у них нет -- узлы нужны
+		 * только чтобы pwrseq_qcom_wcn_match() нашёл PMU по phandle из
+		 * vddaon-supply узла wifi (pwrseq-qcom-wcn.c:420).
+		 */
+		regulators {
+			vreg_pmu_rfa_cmn: ldo0 { regulator-name = "vreg_pmu_rfa_cmn"; };
+			vreg_pmu_aon_0p59: ldo1 { regulator-name = "vreg_pmu_aon_0p59"; };
+			vreg_pmu_wlcx_0p8: ldo2 { regulator-name = "vreg_pmu_wlcx_0p8"; };
+			vreg_pmu_wlmx_0p85: ldo3 { regulator-name = "vreg_pmu_wlmx_0p85"; };
+			vreg_pmu_btcmx_0p85: ldo4 { regulator-name = "vreg_pmu_btcmx_0p85"; };
+			vreg_pmu_rfa_0p8: ldo5 { regulator-name = "vreg_pmu_rfa_0p8"; };
+			vreg_pmu_rfa_1p2: ldo6 { regulator-name = "vreg_pmu_rfa_1p2"; };
+			vreg_pmu_rfa_1p7: ldo7 { regulator-name = "vreg_pmu_rfa_1p7"; };
+			vreg_pmu_pcie_0p9: ldo8 { regulator-name = "vreg_pmu_pcie_0p9"; };
+			vreg_pmu_pcie_1p8: ldo9 { regulator-name = "vreg_pmu_pcie_1p8"; };
+		};
+	};
+
+
+	/*
+	 * ABL refuses to boot a device tree it cannot apply the stock dtbo overlay
+	 * to, and that overlay resolves 158 vendor labels that do not exist in a
+	 * mainline tree. Replacing the dtbo with a no-op one does not work either:
+	 * ABL rejects hand-built overlays even on the vendor tree.
+	 *
+	 * So this node exists purely as a landing area. A post-processing step
+	 * (martini/mksink.py) rewrites __symbols__ so every label the overlay
+	 * looks for resolves here, which makes the overlay apply cleanly while all
+	 * of its vendor content ends up inside one disabled node that no mainline
+	 * driver will ever look at. Nothing in this device tree references it.
+	 */
+	dtbo_sink: dtbo-sink {
+		status = "disabled";
+	};
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/*
+		 * No stdout-path on purpose. It would only take effect if the
+		 * command line carried no console= at all: of_console_check()
+		 * bails out on console_set_on_cmdline, and CONFIG_CMDLINE_FORCE
+		 * always gives us console=tty0. So it never selected a console
+		 * here, and pointing it at a disabled node is just misleading.
+		 */
+
+		/*
+		 * ABL appends its own androidboot.* arguments to whatever is
+		 * already in bootargs rather than creating the property, so it
+		 * has to exist. The contents are irrelevant to us: the kernel is
+		 * built with CONFIG_CMDLINE_FORCE, so it uses its built-in
+		 * command line and ignores this entirely.
+		 */
+		bootargs = "";
+
+		/*
+		 * Continuous splash buffer left running by XBL/ABL. The base
+		 * address is the martini override of splash_memory from
+		 * martini-common.dtsi. The generic lahaina value (0xe1000000)
+		 * is NOT usable here: it falls inside martini's enlarged
+		 * removed_mem carve-out below, so touching it trips an XPU
+		 * violation and the SoC resets straight back into fastboot.
+		 *
+		 * Kept even though &mdss is now enabled: simpledrm carries the
+		 * log for the whole of early boot and only hands over when msm's
+		 * KMS calls aperture_remove_all_conflicting_devices()
+		 * (drivers/gpu/drm/msm/msm_kms.c:272). Only the GCC display AXI
+		 * clocks are held here -- the dispcc clocks belong to the real
+		 * display drivers, which now take them themselves.
+		 */
+		framebuffer0: framebuffer@e4d00000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0xe4d00000 0x0
+			(MARTINI_FB_WIDTH * MARTINI_FB_HEIGHT * 4)>;
+			width = <MARTINI_FB_WIDTH>;
+			height = <MARTINI_FB_HEIGHT>;
+			stride = <(MARTINI_FB_WIDTH * 4)>;
+			format = "a8r8g8b8";
+
+			clocks = <&gcc GCC_DISP_HF_AXI_CLK>,
+			<&gcc GCC_DISP_SF_AXI_CLK>;
+		};
+	};
+
+	/*
+	 * Battery rail. Every SMPS on both PMICs is fed from it, and the RPMh
+	 * regulator driver wants a parent supply for each rail it registers, so
+	 * it has to be modelled -- as a fixed regulator, because nothing in
+	 * Linux can control it.
+	 */
+	vph_pwr: vph-pwr-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vph_pwr";
+		regulator-min-microvolt = <3700000>;
+		regulator-max-microvolt = <3700000>;
+
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&reserved_memory {
+	/*
+	 * XBL/UEFI keeps its serial log ring buffer here (oplus
+	 * kboot_uboot_logmem). Reserved so the kernel never hands it out.
+	 */
+	uefi_log_mem: memory@9fe00000 {
+		reg = <0x0 0x9fe00000 0x0 0x200000>;
+		no-map;
+	};
+
+	/*
+	 * Continuous splash region (martini value). Must be no-map: simpledrm
+	 * ioremaps it, and the kernel must not use it as ordinary RAM or the
+	 * picture turns into noise.
+	 */
+	cont_splash_mem: memory@e4d00000 {
+		reg = <0x0 0xe4d00000 0x0 0x02300000>;
+		no-map;
+	};
+
+	/* Dynamic-FPS scratch area used by the display firmware. */
+	dfps_data_mem: memory@e7000000 {
+		reg = <0x0 0xe7000000 0x0 0x100000>;
+		no-map;
+	};
+
+	/*
+	 * Same base address and zone sizes as the vendor kernel's ramoops, so
+	 * the console log written here survives a reboot into Android and shows
+	 * up as /sys/fs/pstore/console-ramoops there. Deliberately mappable
+	 * (no no-map) because pstore has to memremap it.
+	 *
+	 * Do not change any of these four sizes. We are the writer and the oplus
+	 * kernel is the reader, and each computes the console zone's offset from
+	 * its own device tree. The vendor node (martini-common.dtsi) carves seven
+	 * extra oplus zones of 0x8000 on top of ours, and the two arithmetics land
+	 * on the same address only by exact coincidence:
+	 *
+	 *   mainline: dump = 0x5b8000 - 0x40000 - 0x200000 - 0x200000 = 0x178000,
+	 *             which is 5 whole records of 0x40000 -> console at +0x140000
+	 *   oplus:    dump = 0x5b8000 - ...            - 7 * 0x8000  = 0x140000,
+	 *             the same 5 records                -> console at +0x140000
+	 *
+	 * Raising console-size to fit a more verbose boot therefore breaks reading
+	 * it back twice over: the offsets diverge, and the reader would still only
+	 * take the first 0x40000 of a larger ring. Cut the log volume instead.
+	 *
+	 * The dump zones need none of that luck: they sit at the very start of the
+	 * region in both layouts (fs/pstore/ram.c:788) with the same record-size,
+	 * so a panic record always reads back as /sys/fs/pstore/dmesg-ramoops-0.
+	 * That is the channel the lockup detectors in build.sh aim for.
+	 */
+	ramoops@e9700000 {
+		compatible = "ramoops";
+		reg = <0x0 0xe9700000 0x0 0x005b8000>;
+		record-size = <0x40000>;
+		console-size = <0x40000>;
+		ftrace-size = <0x200000>;
+		pmsg-size = <0x200000>;
+	};
+
+	cnss_wlan_mem: cnss-wlan-region {
+		compatible = "shared-dma-pool";
+		no-map;
+		size = <0x0 0x1400000>;
+		alignment = <0x0 0x400000>;
+	};
+};
+
+/*
+ * martini grows the TZ/fingerprint "removed" carve-out from the generic lahaina
+ * 0x6800000 to 0x8e00000 (0xd8800000..0xe1600000). Mapping the extra 38 MiB as
+ * ordinary RAM faults as soon as the kernel touches it.
+ */
+&removed_mem {
+	reg = <0x0 0xd8800000 0x0 0x8e00000>;
+};
+
+/*
+ * RPMh regulators. These feed the USB HS PHY, UFS, and -- since the display
+ * pipeline was enabled -- the DSI PHY, the DSI controller and the panel itself.
+ * They are the first thing that has to be proven not to disturb the
+ * bootloader's display state.
+ *
+ * Deliberately not the full lahaina rail set. Only the rails those consumers
+ * need plus the group parents the driver demands for them are declared, because
+ * a rail with regulator-min-microvolt == regulator-max-microvolt has that
+ * voltage *written* at registration time (set_machine_constraints() in
+ * drivers/regulator/core.c), so every extra rail declared here is one more
+ * write into a PMIC the bootloader has already configured. The rails in that
+ * class -- L2B (3.072 V), L9B (1.2 V), L1C (1.8 V) and L12C (1.8 V) -- all
+ * match the vendor value to the microvolt, so those writes are no-ops.
+ *
+ * Every voltage here was read out of the DTB the bootloader handed to Android
+ * (martini-real.dtb, /soc/apps_rsc/rpmh-regulator-*, qcom,set = <3>) and agrees
+ * with sm8350-mtp.dts, with one exception noted on S11B.
+ *
+ * Unused rails do not get switched off behind our back: qcom-rpmh-regulator.c
+ * initialises vreg->enabled to -EINVAL ("unknown", line 493), and
+ * regulator_late_cleanup() skips a regulator whose is_enabled() is <= 0
+ * (core.c:6822). So no regulator_ignore_unused on the command line is needed.
+ * What does need care is a rail an enabled *consumer* later drops -- see the
+ * always-on flags below.
+ */
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm8350-rpmh-regulators";
+		qcom,pmic-id = "b";
+
+		vdd-s11-supply = <&vph_pwr>;
+		vdd-l1-l4-supply = <&vreg_s11b_0p95>;
+		vdd-l2-l7-supply = <&vreg_bob>;
+		vdd-l3-l5-supply = <&vreg_bob>;
+		vdd-l6-l9-l10-supply = <&vreg_s11b_0p95>;
+
+		/* Parent of L1B and L6B. martini allows 1.012 V, mtp says 1.000. */
+		vreg_s11b_0p95: smps11 {
+			regulator-name = "vreg_s11b_0p95";
+			regulator-min-microvolt = <952000>;
+			regulator-max-microvolt = <1012000>;
+			regulator-always-on;
+		};
+
+		/* usb_1_qmpphy vdda-pll, once SuperSpeed is enabled. */
+		vreg_l1b_0p91: ldo1 {
+			regulator-name = "vreg_l1b_0p91";
+			regulator-min-microvolt = <912000>;
+			regulator-max-microvolt = <920000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* usb_1_hsphy vdda33. The only consumer in the vendor tree too. */
+		vreg_l2b_3p07: ldo2 {
+			regulator-name = "vreg_l2b_3p07";
+			regulator-min-microvolt = <3072000>;
+			regulator-max-microvolt = <3072000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/*
+		 * usb_1_hsphy vdda-pll -- and, per the vendor tree, mdss_dsi_phy0's
+		 * vdda-0p9 as well (plus the UFS PHY, both PCIe controllers and all
+		 * six CSI PHYs). The DSI PHY is what keeps the bootloader's splash on
+		 * the panel, and it is not a Linux consumer, so its RPMh vote is the
+		 * bootloader's. Once the USB PHY claims this rail, the USB PHY's own
+		 * regulator_bulk_disable() on runtime suspend
+		 * (phy-qcom-snps-femto-v2.c:474) would drop it and take the panel --
+		 * and with it the only log channel -- down. always-on is the mainline
+		 * equivalent of the qcom,proxy-consumer-enable the vendor node uses.
+		 */
+		vreg_l5b_0p88: ldo5 {
+			regulator-name = "vreg_l5b_0p88";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <888000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		/* Same story as L5B: usb_1_qmpphy vdda-phy, and mdss_dsi_ctrl0 vdda-1p2. */
+		vreg_l6b_1p2: ldo6 {
+			regulator-name = "vreg_l6b_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1208000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		/* ufs_mem_hc vcc. Parent is vreg_bob, same group as L2B. */
+		vreg_l7b_2p96: ldo7 {
+			regulator-name = "vreg_l7b_2p96";
+			regulator-min-microvolt = <2400000>;
+			regulator-max-microvolt = <3008000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* ufs_mem_hc vccq. Parent is vreg_s11b_0p95, same group as L6B/L10B. */
+		vreg_l9b_1p2: ldo9 {
+			regulator-name = "vreg_l9b_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_s10b_1p8: smps10 {
+			regulator-name = "vreg_s10b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-always-on;
+		};
+
+		vreg_s12b_rfa2: smps12 {
+			regulator-name = "vreg_s12b_rfa2";
+			regulator-min-microvolt = <1350000>;
+			regulator-max-microvolt = <1360000>;
+			regulator-always-on;
+		};
+
+	};
+
+	regulators-1 {
+		compatible = "qcom,pm8350c-rpmh-regulators";
+		qcom,pmic-id = "c";
+
+		vdd-bob-supply = <&vph_pwr>;
+		vdd-s1-supply = <&vph_pwr>;
+		vdd-l1-l12-supply = <&vreg_s1c_1p86>;
+		vdd-l2-l8-supply = <&vreg_s1c_1p86>;
+		vdd-l3-l4-l5-l7-l13-supply = <&vreg_bob>;
+
+		/* Parent of L1C. */
+		vreg_s1c_1p86: smps1 {
+			regulator-name = "vreg_s1c_1p86";
+			regulator-min-microvolt = <1880000>;
+			regulator-max-microvolt = <1952000>;
+		};
+
+		/* Parent of L2B and L5B. */
+		vreg_bob: bob {
+			regulator-name = "vreg_bob";
+			regulator-min-microvolt = <3008000>;
+			regulator-max-microvolt = <3960000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_AUTO>;
+		};
+
+		/* usb_1_hsphy vdda18. The only consumer in the vendor tree too. */
+		vreg_l1c_1p8: ldo1 {
+			regulator-name = "vreg_l1c_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/*
+		 * Touch controller analog rail, the vendor node's vdd_2v8-supply.
+		 * pm8350c L3, whose group parent vdd-l3-l4-l5-l7-l13 is already
+		 * declared above for L13C.
+		 *
+		 * Left as the rail's full 3.0-3.3 V range rather than pinned to
+		 * the 3.008 V the vendor driver writes (vdd_2v8_volt = <0x2de600>),
+		 * for the same reason as L13C: min != max means
+		 * set_machine_constraints() writes no voltage at registration, so
+		 * nothing is poked into a PMIC the bootloader has configured. The
+		 * two ends of the range are 200 mV apart and the controller does
+		 * not care.
+		 */
+		vreg_l3c_3p0: ldo3 {
+			regulator-name = "vreg_l3c_3p0";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/*
+		 * Touch controller logic/IO rail, the vendor node's
+		 * vcc_1v8-supply. pm8350c L8, fixed at 1.8 V in the vendor tree
+		 * (min == max == init), so declaring it that way here writes the
+		 * value it already has.
+		 */
+		vreg_l8c_1p8: ldo8 {
+			regulator-name = "vreg_l8c_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/*
+		 * Panel vddio, 1.8 V. Confirmed as pm8350c L12 from the DTB the
+		 * bootloader handed to Android: pm8350c_l12's phandle is what the
+		 * vendor display node takes as vddio-supply, and the panel's supply
+		 * entry (dsi_panel_oplus_pwr_supply) asks for 1.8 V min *and* max.
+		 *
+		 * These two rails MUST live in this node and not in regulators-0.
+		 * pm8350_vreg_data (drivers/regulator/qcom-rpmh-regulator.c:1246)
+		 * stops at ldo10, so an ldo12/ldo13 child under the "b" PMIC is an
+		 * "Unknown regulator" -- and rpmh_regulator_probe() returns on the
+		 * first bad child (:1835), so it takes every *other* rail in that
+		 * node down with it. That is a hard -EINVAL, never retried, and it
+		 * is silent unless you are reading dmesg: L5B/L6B/L2B/L7B/L9B all
+		 * vanish, which kills the DSI PHY, the DSI controller, the USB HS
+		 * PHY (so no ttyGS0 to read the failure on) and UFS in one go.
+		 */
+		vreg_l12c_1p8: ldo12 {
+			regulator-name = "vreg_l12c_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/*
+		 * Panel vdd, pm8350c L13 (vdd-supply of the same vendor node). The
+		 * rail is 3.0-3.2 V with an init voltage of 3.0 V, and oplus's panel
+		 * supply entry asks for 3.2 V min and max.
+		 *
+		 * Left as a range on purpose. min != max means
+		 * set_machine_constraints() writes no voltage at registration
+		 * (drivers/regulator/core.c), so the rail stays wherever the
+		 * bootloader left it -- 3.0 V, which is also what every non-oplus
+		 * variant of this same panel node runs at. Narrow it to
+		 * 3200000/3200000 to reproduce Android exactly, at the cost of a
+		 * PMIC write into a live panel during early boot.
+		 */
+		vreg_l13c_3p0: ldo13 {
+			regulator-name = "vreg_l13c_3p0";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+	};
+
+	regulators-2 {
+		compatible = "qcom,pmr735a-rpmh-regulators";
+		qcom,pmic-id = "e";
+
+		vdd-s2-supply = <&vph_pwr>;
+		vdd-l7-bob-supply = <&vreg_bob>;
+
+		vreg_s2e_aon: smps2 {
+			regulator-name = "vreg_s2e_aon";
+			regulator-min-microvolt = <950000>;
+			regulator-max-microvolt = <952000>;
+			regulator-always-on;
+		};
+
+		/*
+		 * No smps3 here on purpose, and this is a tried-and-rejected route,
+		 * not an oversight.
+		 *
+		 * S3E is the QCA6490's internal power amplifier supply: the vendor
+		 * tree aliases it onto regulator-pmr735a-s3 (2.2..2.35 V) and it is
+		 * the name cnss prints in "Setup S3E TCS Addr". Nothing consumes it
+		 * as a -supply anywhere in that tree. cnss brings it up out of band
+		 * instead, by writing 1 into a pre-programmed RPMh command slot --
+		 * cnss_enable_int_pow_amp_vreg() (cnss2/power.c:1261) at
+		 * qcom,tcs_offset_int_pow_amp_vreg = <0x4d0> off the tcs_cmd reg
+		 * 0xb2e5510 of martini's qcom,cnss-qca6490 node -- and only when the
+		 * BDF download response arrives without QMI_WLFW_HW_XPA, i.e. when
+		 * the board has no external PA and the chip drives its own.
+		 * bt_qca6490 pokes the same base and the same 0x4d0 under the name
+		 * qcom,tcs_offset_ipa, so it is one rail shared by both radios.
+		 *
+		 * Declaring it here as regulator-always-on (2.2..2.35 V, which
+		 * hfsmps515's 320000 + n*16000 grid resolves to 2.208 V) does NOT
+		 * reproduce that. It was tried: the phone then resets before the
+		 * display comes up, i.e. far earlier than anything WLAN touches.
+		 * That address is not in apps_rsc (0x18200000) but up in the
+		 * AOSS/PDC neighbourhood next to pdc@b220000 and
+		 * rpmh-master-stats@b221200, so the slot cnss edits belongs to a
+		 * command set XBL owns, and taking the same rail over through the
+		 * rpmh-regulator driver fights whoever already owns it.
+		 *
+		 * If this rail turns out to be needed -- ath11k now prints the
+		 * external/internal PA bit, see QMI_WLANFW_HW_XPA in ath11k/qmi.h --
+		 * replicate cnss's write into that slot rather than reaching for a
+		 * regulator handle.
+		 */
+
+		/*
+		 * WLAN antenna switch, 2.8 V. The vendor cnss driver enables it in
+		 * the same batch as the five core QCA6490 rails --
+		 * "Regulator wlan-ant-switch is being enabled" sits between
+		 * vdd-wlan-io and vdd-wlan-aon in its log -- and its config tuple
+		 * asks for 0x2ab980..0x2ab980, i.e. 2.8 V fixed.
+		 *
+		 * qcom,wcn6855-pmu has no property for it: the mainline pwrseq model
+		 * only describes rails feeding the module's own PMU, and this one
+		 * feeds an external RF switch instead. So it is held on here rather
+		 * than sequenced. It is an RF-path supply, not a link-up supply --
+		 * PCIe enumerates without it, but the radio will not perform.
+		 */
+		vreg_l7e_2p8: ldo7 {
+			regulator-name = "vreg_l7e_2p8";
+			regulator-min-microvolt = <2800000>;
+			regulator-max-microvolt = <2800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+	};
+};
+
+&ufs_mem_phy {
+	/*
+	 * Both rails are the same L5B/L6B already declared above for the USB
+	 * HS PHY (regulator-always-on there), not a separate "a"-suffix PMIC --
+	 * this tree only has apps_rsc regulators-0 ("b") and regulators-1 ("c"),
+	 * there is no "a" node, so vreg_l*a_* never resolved to anything.
+	 */
+	vdda-phy-supply = <&vreg_l5b_0p88>;
+	vdda-pll-supply = <&vreg_l6b_1p2>;
+	status = "okay";
+};
+
+&ufs_mem_hc {
+	vcc-supply = <&vreg_l7b_2p96>;
+	vccq-supply = <&vreg_l9b_1p2>;
+
+	reset-gpios = <&tlmm 203 GPIO_ACTIVE_LOW>;
+	status = "okay";
+};
+
+/*
+ * TLMM pins the AP must not touch.
+ *
+ * gpiochip_add_data() walks every line and calls the driver's get_direction()
+ * on each one that is not masked out (drivers/gpio/gpiolib.c:1309), which for
+ * pinctrl-msm means reading that pin's ctl register. Some TLMM pins are owned
+ * by the secure world on every lahaina device, and reading one of those is an
+ * XPU violation: the SoC resets instantly, with no log. That is what killed the
+ * boot inside sm8350-tlmm's probe. gpio-reserved-ranges clears those lines from
+ * the gpiochip's valid_mask so the walk skips them.
+ *
+ * Every other mainline SM8350 board sets this and the sets genuinely differ --
+ * qcom's own reference boards (mtp, hdk) use <52 8>, sagami <44 4>, surface
+ * duo2 <4 4>, <12 4>, <56 4>, <76 4> -- so martini's block cannot be inferred
+ * from them, and the vendor tree does not carry the property at all (the
+ * downstream driver never walks the pins, so it never needed it).
+ *
+ * So reserve everything except the two lines the panel is actually driven by:
+ * reset (24) and VOUT enable (25), plus the two the touch controller is driven
+ * by: its reset (22) and interrupt (23). All four are AP-owned -- the
+ * bootloader drives the panel pair itself to bring the splash up, and the
+ * vendor kernel drives the touch pair from the AP -- so reading them back is
+ * safe.
+ *
+ * Since then PCIe/WiFi added four more, by the same argument: perst (94), clkreq
+ * (95) and wake (96) for &pcie0, and WLAN_EN (64) plus BT_EN (65) for
+ * &wcn6855-pmu. The vendor tree drives all five from the AP -- 94/95/96 from
+ * qcom,pcie@1c00000, 64 and 65 as wlan-en-gpio / qcom,bt-en-gpio of
+ * qcom,cnss-qca6490 -- so none of them is secure-world owned.
+ *
+ * 65 in particular has to be unmasked, not just left out of a pinctrl state:
+ * msm_pinmux_request() (pinctrl-msm.c) is `gpiochip_line_is_valid() ? 0 :
+ * -EINVAL`, so a masked line cannot even be *muxed*, and pwrseq-qcom-wcn's
+ * default pinctrl state naming gpio65 fails the whole PMU probe with -EINVAL.
+ * That contradicts the gpio20/21 note below, which was never actually exercised
+ * -- 20 and 21 fall in the 20..25 gap and have been valid all along.
+ *
+ * Note that gpio20/21, the I2C4 SDA/SCL the controller hangs off, stay
+ * reserved and that is correct: gpio-reserved-ranges only masks lines off the
+ * *gpiochip*, and pin muxing does not consult valid_mask, so &qup_i2c4_default
+ * still muxes them to qup4. Only a line something asks for as a GPIO has to be
+ * unmasked, which is why 22 and 23 do and 20 and 21 do not.
+ *
+ * The ranges must be exact. gpiochip_apply_reserved_ranges()
+ * (drivers/gpio/gpiolib.c:764) silently *skips* any <start count> pair whose
+ * start + count exceeds ngpio, which is 204 here (pinctrl-sm8350.c: .ngpios),
+ * so an off-by-one turns into "this whole range is not reserved at all" with no
+ * diagnostic -- and every line it should have covered gets walked again.
+ *
+ * <97 106> therefore ends at 202 inclusive, not 203: gpio203 is deliberately
+ * left valid because &ufs_mem_hc drives it as reset-gpios, exactly as in the
+ * known-good <0 203>.
+ *
+ * The panel TE line (82) is NOT freed here and must not be. gpio-reserved-ranges
+ * only masks lines off the *gpiochip*; pin muxing goes through pinctrl and does
+ * not consult valid_mask at all, so &mdp_vsync_active still muxes gpio82 to
+ * mdp_vsync while the line stays out of gpiolib's reach. Nothing asks for it as
+ * a GPIO, so unmasking it would only expose one more pin to the probe walk for
+ * no gain.
+ */
+&tlmm {
+	/* 66 + 16 = 82, so this covers 66..81 and leaves 65 (BT_EN) valid. */
+	gpio-reserved-ranges = <0 20>, <26 38>, <66 16>, <83 11>, <97 106>;
+	/*
+	 * Panel TE. gpio82 with function mdp_vsync, taken by the panel node so
+	 * the DPU's INTF sees the tear signal in command mode. There is no
+	 * separate suspend state: the vendor tree's sde_te_suspend only turns
+	 * the same pin into a pulled-down input, and leaving it muxed costs
+	 * nothing here.
+	 */
+	mdp_vsync_active: mdp-vsync-active-state {
+		pins = "gpio82";
+		function = "mdp_vsync";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	/*
+	 * Touch controller reset and interrupt, copied from the vendor tree's
+	 * ts_reset_active/ts_int_active (pmx_ts_reset_active_oplus,
+	 * pmx_ts_int_active_oplus). Only the active states: the suspend states
+	 * exist to park the pins while the panel is off, which this driver does
+	 * not do yet.
+	 *
+	 * output-low on the reset pin is not a polarity statement, it is the
+	 * boot-time state -- the controller comes up held in reset and the
+	 * driver releases it. Which direction that is comes from
+	 * GPIO_ACTIVE_LOW on the reset-gpios below.
+	 */
+	ts_reset_active: ts-reset-active-state {
+		pins = "gpio22";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	ts_int_active: ts-int-active-state {
+		pins = "gpio23";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
+		input-enable;
+	};
+
+	wlan_en_state: wlan-en-state {
+		pins = "gpio64";
+		function = "gpio";
+		drive-strength = <16>;
+		output-low;
+		bias-pull-up;
+	};
+
+	bt_en_state: bt-en-state {
+		pins = "gpio65";
+		function = "gpio";
+		drive-strength = <16>;
+		output-low;
+		bias-pull-down;
+	};
+
+
+	pcie0_default_state: pcie0-default-state {
+		/*
+		 * PERST# is pulled down, not left floating: both the vendor tree
+		 * (pcie0_perst_default) and sm8450.dtsi do this. qcom-pcie takes the
+		 * line as a gpiod and drives it, but until it does, bias-disable
+		 * leaves PERST# floating -- and a float that reads high releases the
+		 * endpoint from reset before pwrseq has powered it.
+		 */
+		perst-pins {
+			pins = "gpio94";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+
+		clkreq-pins {
+			pins = "gpio95";
+			function = "pcie0_clkreqn";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+
+		wake-pins {
+			pins = "gpio96";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+	};
+
+	wlan_en_active: wlan-en-active-state {
+		pins = "gpio64";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+};
+
+/*
+ * Touchscreen: Synaptics S3908, on QUPv3 SE4 as I2C at address 0x4b.
+ *
+ * Both the bootloader command line and the vendor device tree name the part.
+ * ABL passes
+ *
+ *   oplus_bsp_tp_custom.dsi_display0=
+ *       qcom,mdss_dsi_samsung_ams662zs01_dvt_dsc_cmd:synaptics-s3908
+ *
+ * i.e. it pairs this panel with that controller, and synaptics20031@4B under
+ * qupv3_se4_i2c is the only enabled child of that bus -- st_fts@49 and
+ * focaltech@38 next to it are both status = "disabled".
+ *
+ * Everything below is that node's content translated to mainline bindings:
+ *
+ *   reg = <0x4b>                          -> reg = <0x4b>
+ *   irq-gpio = <&tlmm 23 0x2008>          -> interrupts = <23 IRQ_TYPE_LEVEL_LOW>
+ *   reset-gpio = <&tlmm 22 0x01>          -> reset-gpios = <&tlmm 22 GPIO_ACTIVE_LOW>
+ *   vcc_1v8-supply = <&pm8350c_l8>        -> vdd-supply
+ *   vdd_2v8-supply = <&pm8350c_l3>        -> avdd-supply
+ *
+ * The 0x2008 in the vendor irq-gpio flags cell is not a GPIO flag at all: the
+ * vendor driver feeds that cell straight to request_threaded_irq() as IRQF_*
+ * bits (touchpanel_common_driver.c:1584), and 0x2008 is
+ * IRQF_ONESHOT | IRQF_TRIGGER_LOW. Hence level-low here, which is also what the
+ * hardware wants -- the controller holds the line down until its pending
+ * message has been read.
+ *
+ * No touchscreen-size-x/y and no inversion properties: the controller reports
+ * in its own 8640x19200 grid (touchpanel,panel-coords = <0x21c0 0x4b00>, which
+ * is the 1080x2400 panel at 8x), the driver takes that range from the
+ * controller's own application info, and userspace scales. Add
+ * touchscreen-inverted-x/-inverted-y/-swapped-x-y here if the axes come out
+ * mirrored against the display.
+ */
+
+/*
+ * The QUPv3 wrapper SE4 lives in. Enabling the bus alone is NOT enough and
+ * fails completely silently: sm8350.dtsi has this node disabled, and it is the
+ * wrapper's driver that creates the platform devices for its children --
+ * geni_se_probe() ends in devm_of_platform_populate()
+ * (drivers/soc/qcom/qcom-geni-se.c). With the wrapper off, &i2c4 is a device
+ * tree node that never becomes a struct device, so there is no probe to fail,
+ * no adapter under /sys/bus/i2c/devices, and nothing in dmesg at all -- not
+ * even with CONFIG_DEBUG_DRIVER.
+ *
+ * Every other mainline sm8350 board that uses a QUP does the same thing
+ * (sm8350-hdk.dts:525, sm8350-sony-xperia-sagami.dtsi:634).
+ *
+ * Only the children that are individually enabled come up, so this costs one
+ * probe and the two QUP0 AHB clocks. It does not need &gpi_dma0, which stays
+ * disabled: i2c-qcom-geni picks FIFO over GPI DMA from the GENI_IF_DISABLE_RO
+ * hardware register (i2c-qcom-geni.c:1104), not from the dmas property, and
+ * SE4 has a FIFO -- so dma_request_chan() is never reached and
+ * CONFIG_QCOM_GPI_DMA=m being unloadable here does not matter.
+ */
+&qupv3_id_0 {
+	status = "okay";
+};
+
+&gpi_dma0 {
+	status = "okay";
+};
+
+&i2c4 {
+	status = "okay";
+	clock-frequency = <400000>;
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&qup_i2c4_default>;
+
+	touchscreen@4b {
+		compatible = "syna,s3908";
+		reg = <0x4b>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <23 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&ts_int_active>;
+		reset-gpios = <&tlmm 22 GPIO_ACTIVE_LOW>;
+		vdd-supply = <&vreg_l3c_3p0>;
+		avdd-supply = <&vreg_l8c_1p8>;
+	};
+};
+/*
+ * Debug UART. Left disabled: this device has no UART routed out, and mainline's
+ * &uart2 label on SM8350 is not the SE the vendor tree calls qup_uart -- it is
+ * QUPv3 SE3 (GCC_QUPV3_WRAP0_S3_CLK, qup_uart3_default_state), which sm8350.dtsi
+ * itself annotates "QUP no. 3 seems to be strictly SPI-only" in the very next
+ * node. Enabling it added a driver probe and a TLMM pin remux that the known-good
+ * hybrid tree does not have, on a serial engine that may not even be a UART here,
+ * for no observable benefit. Re-enable only together with an actual UART cable.
+ */
+&uart2 {
+	status = "disabled";
+};
+
+/*
+ * USB in device mode: the log channel this device should have had all along.
+ *
+ * With CONFIG_USB_G_SERIAL and CONFIG_U_SERIAL_CONSOLE the legacy serial gadget
+ * registers a printk console on ttyGS0 by itself -- gserial_alloc_line() calls
+ * gs_console_init() for port 0 (drivers/usb/gadget/function/u_serial.c:1330), and
+ * that console carries CON_PRINTBUFFER (u_serial.c:1092), so the whole boot log
+ * buffered up to the moment the gadget binds is replayed to the host. On the host
+ * it appears as a CDC ACM device (use_acm defaults to true,
+ * drivers/usb/gadget/legacy/serial.c:89) -- i.e. /dev/ttyACM0.
+ *
+ * SuperSpeed is deliberately left out for now: &usb_1_qmpphy stays disabled, so
+ * this needs neither CONFIG_TYPEC (the combo PHY's orientation-switch) nor the
+ * DisplayPort graph, and 480 Mbit is not the bottleneck for a console. Enabling
+ * it later is: status = "okay" on &usb_1_qmpphy with vdda-phy-supply = <&vreg_l6b_1p2>
+ * and vdda-pll-supply = <&vreg_l1b_0p91>, both already declared above, plus
+ * dropping the three overrides below.
+ */
+&usb_1 {
+	status = "okay";
+
+	/*
+	 * Without an SS PHY the glue must not wait for the QMP pipe clock; this
+	 * makes it select UTMI as the pipe clock source instead
+	 * (drivers/usb/dwc3/dwc3-qcom.c:681).
+	 */
+	qcom,select-utmi-as-pipe-clk;
+};
+
+&usb_1_dwc3 {
+	/*
+	 * "peripheral", not "otg": with dr_mode = peripheral dwc3-qcom forces
+	 * QSCRATCH VBUS_VALID on at probe (dwc3-qcom.c:692), so the gadget comes up
+	 * without any VBUS sensing at all. That matters here -- the vendor tree gets
+	 * its VBUS state from an extcon on the EUD block (extcon = <&eud> on its
+	 * ssusb@a600000), and mainline's EUD driver is only a role switch, so there
+	 * is no VBUS notifier to wait for.
+	 *
+	 * The ports/endpoint graph inherited from sm8350.dtsi can stay as it is: it
+	 * is only read to find an extcon, and only through phys[0] (drivers/usb/dwc3/
+	 * core.c:2042), which is the HS PHY and has no port node.
+	 */
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+
+	phys = <&usb_1_hsphy>;
+	phy-names = "usb2-phy";
+};
+
+/*
+ * All three supplies are mandatory -- the driver takes them as a bulk, not
+ * optionally (phy-qcom-snps-femto-v2.c:81, :597) -- and all three match the
+ * vendor tree's hsphy@88e3000: vdd = L5B, vdda18 = L1C, vdda33 = L2B.
+ */
+&usb_1_hsphy {
+	status = "okay";
+
+	vdda-pll-supply = <&vreg_l5b_0p88>;
+	vdda18-supply = <&vreg_l1c_1p8>;
+	vdda33-supply = <&vreg_l2b_3p07>;
+};
+
+&soc {
+	arch_timer: timer {
+		compatible = "arm,armv8-timer";
+		interrupts = <0x01 0x0d 0xff08 0x01 0x0e 0xff08 0x01 0x0b 0xff08 0x01 0x0c 0xff08>;
+		clock-frequency = <0x124f800>;
+	};
+};
+
+&scm {
+	qcom,sdi-enabled;
+};
+
+/*
+ * Display. The label is mdss_dsi0_phy, not mdss_dsi_phy0 -- the latter is the
+ * vendor tree's name and does not exist in sm8350.dtsi.
+ *
+ * vdds is the supply name the 5nm PHY driver asks for (the "vdds" entry of
+ * dsi_phy_7nm_37750uA_regulators, drivers/gpu/drm/msm/dsi/phy/dsi_phy_7nm.c),
+ * and L5B is the rail the vendor tree hands it as vdda-0p9
+ * (display/lahaina-sde.dtsi: &mdss_dsi_phy0 { vdda-0p9-supply = <&L5B>; }),
+ * at 0.88 V and 37550 uA -- the same load mainline declares.
+ */
+&mdss_dsi0_phy {
+	status = "okay";
+	vdds-supply = <&vreg_l5b_0p88>;
+};
+
+/*
+ * vdda, 1.2 V / 8350 uA (the "vdda" entry of sc7280_dsi_regulators, which is
+ * what a v2.5.0 DSI controller resolves to -- dsi_cfg.c maps
+ * MSM_DSI_6G_VER_MINOR_V2_5_0 to sc7280_dsi_cfg). L6B, matching the vendor
+ * tree's vdda-1p2-supply on qcom,mdss_dsi_ctrl0.
+ *
+ * refgen is the controller's other supply in that same bulk, and it is NOT
+ * optional: sm8350.dtsi already carries refgen-supply = <&refgen> pointing at
+ * regulator@88e7000, and devm_regulator_bulk_get_const() on a phandle whose
+ * node exists but has no registered regulator returns -EPROBE_DEFER, not a
+ * dummy. So CONFIG_REGULATOR_QCOM_REFGEN must be built *in* (=y) -- as a module
+ * it never loads here and this controller defers forever, which is silent
+ * because a deferred probe prints nothing at the default log level. Nothing is
+ * needed in this file for it.
+ *
+ * The panel's own rails belong on the panel node, not here: the vendor tree
+ * puts vddio/vdd on the controller only because its dsi_display driver looks
+ * the panel supply entries up on the controller's device.
+ */
+&mdss_dsi0 {
+	status = "okay";
+	vdda-supply = <&vreg_l6b_1p2>;
+
+	panel: panel@0 {
+		compatible = "samsung,ams662zs01";
+		reg = <0>;
+
+		/*
+		 * qcom,platform-reset-gpio = <&tlmm 24 0> with
+		 * qcom,mdss-dsi-reset-sequence = <1 10>, <0 10>, <1 10>: the pin
+		 * idles high and the panel is reset by pulling it low, i.e. it is
+		 * active low.
+		 *
+		 * qcom,platform-panel-vout-gpio = <&tlmm 25 0> is an active-high
+		 * enable: the vendor driver raises it in dsi_panel_power_on() and
+		 * drops it in dsi_panel_power_off().
+		 */
+		reset-gpios = <&tlmm 24 GPIO_ACTIVE_LOW>;
+		vout-gpios = <&tlmm 25 GPIO_ACTIVE_HIGH>;
+
+		vddio-supply = <&vreg_l12c_1p8>;
+		vdd-supply = <&vreg_l13c_3p0>;
+
+		/*
+		 * Command-mode panel: the TE line (qcom,platform-te-gpio =
+		 * <&tlmm 82 0>, qcom,panel-te-source = <0>) has to be muxed to
+		 * mdp_vsync for the DPU's INTF to see it. gpio82 is one of the
+		 * four lines mdp_vsync_groups covers on SM8350.
+		 */
+		pinctrl-0 = <&mdp_vsync_active>;
+		pinctrl-1 = <&mdp_vsync_active>;
+		pinctrl-names = "default", "sleep";
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	remote-endpoint = <&panel_in>;
+	data-lanes = <0 1 2 3>;
+};
+
+&mdss_mdp {
+	status = "okay";
+};
+
+/*
+ * Enabling &mdss is a one-way door, and it is worth knowing why before touching
+ * anything here.
+ *
+ * msm_mdss_probe() calls msm_mdss_reset() (drivers/gpu/drm/msm/msm_mdss.c:372),
+ * which asserts DISP_CC_MDSS_CORE_BCR, holds it, and deasserts it. That happens
+ * unconditionally, on a display core that is at that moment still scanning the
+ * bootloader's splash out to the panel -- so the picture is destroyed the
+ * instant this node probes, long before anything checks whether the rest of the
+ * pipeline can come up. A half-finished DSI transfer is what a garbled panel
+ * after that point means.
+ *
+ * The consequence: there is no partial success here. Either the whole chain
+ * binds -- dispcc, mdss, dpu, mdss_dsi0 (needs CONFIG_REGULATOR_QCOM_REFGEN=y,
+ * see above) and the panel driver itself
+ * (CONFIG_DRM_PANEL_SAMSUNG_AMS662ZS01=y, which in turn needs
+ * CONFIG_BACKLIGHT_CLASS_DEVICE=y) -- or the panel goes dark/garbled and stays
+ * that way, because simpledrm's aperture is taken as well. Any one of those
+ * built as a module is the same as absent: this initramfs has no module loader.
+ *
+ * That is why the display went from "no picture" to "garbage" rather than to a
+ * clean failure. Keep the USB serial console (console=ttyGS0) as the primary log
+ * channel while working on this node; the panel cannot be trusted to report its
+ * own failure.
+ */
+&mdss {
+	status = "okay";
+};
+
+/*
+ * Display clock controller. It was deliberately disabled while this tree drove
+ * no display hardware -- its power domain is RPMHPD_MMCX and a deferred probe
+ * detaches it with PD_FLAG_DETACH_POWER_OFF, dropping the panel's rail. That
+ * reasoning no longer applies now that &mdss and its children are the real
+ * consumers of both dispcc and MMCX, and mdss/dpu/dsi cannot bind without it:
+ * &mdss takes power-domains = <&dispcc MDSS_GDSC> and
+ * resets = <&dispcc DISP_CC_MDSS_CORE_BCR> straight from sm8350.dtsi.
+ */
+&dispcc {
+	status = "okay";
+};
+
+&pcie0 {
+	status = "okay";
+
+	/*
+	 * Gen2, because that is what the endpoint is actually run at. The vendor
+	 * kernel pins it before training ("no default_gen_speed, use gen2" /
+	 * "Set pci link speed: 2"), and its enumeration then reports
+	 * "limited by 5 GT/s x1 link at 0000:00:00.0 (capable of 7.876 Gb/s with
+	 * 8 GT/s x1 link)" -- i.e. the QCA6490 advertises Gen3 and the RC is
+	 * deliberately held below it. sm8450-hdk, the one mainline board with
+	 * this chip, sets the same value.
+	 */
+	max-link-speed = <2>;
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcie0_default_state>;
+
+	perst-gpios = <&tlmm 94 GPIO_ACTIVE_LOW>;
+	wake-gpios = <&tlmm 96 GPIO_ACTIVE_HIGH>;
+
+	vdda-supply = <&vreg_l5b_0p88>;
+
+	pcie@0 {
+		wifi@0 {
+			compatible = "pci17cb,1103";
+			reg = <0x10000 0x0 0x0 0x0 0x0>;
+
+			vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+			vddaon-supply = <&vreg_pmu_aon_0p59>;
+			vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+			vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+			vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+			vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+			vddrfa1p8-supply = <&vreg_pmu_rfa_1p7>;
+			vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
+			vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
+		};
+	};
+};
+
+&pcie0_phy {
+	status = "okay";
+
+	vdda-phy-supply = <&vreg_l5b_0p88>;
+	vdda-pll-supply = <&vreg_l6b_1p2>;
+};
+
+

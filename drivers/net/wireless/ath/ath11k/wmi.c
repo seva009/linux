@@ -544,6 +544,27 @@ static int ath11k_pull_service_ready_tlv(struct ath11k_base *ab,
 	cap->default_dbs_hw_mode_index = ev->default_dbs_hw_mode_index;
 	cap->num_msdu_desc = ev->num_msdu_desc;
 
+	/*
+	 * Bring-up diagnostic, deliberately loud. num_mem_reqs is the number of
+	 * memory chunks the firmware wants the host to allocate and hand back in
+	 * the host_mem_chunks array of WMI_INIT; ath11k has no code for that at
+	 * all -- ath11k_wmi_base.num_mem_chunks is only ever read (wmi.c:4478),
+	 * never assigned, so WMI_INIT always carries num_host_mem_chunks = 0 --
+	 * and this event field is parsed and dropped. That is fine for a
+	 * firmware built against ath11k, which asks for nothing; a firmware that
+	 * does ask has to fall back on its own arenas and can then die in them,
+	 * which is what "RAM allocation (%d bytes) failed! arena :: %d" plus an
+	 * assert shortly after WMI_INIT looks like in an RDDM dump.
+	 *
+	 * ath10k does implement the mechanism (ath10k_wmi_alloc_host_mem() and
+	 * the NUM_UNITS_IS_NUM_PEERS/VDEVS/ACTIVE_PEERS flags in ath10k/wmi.h)
+	 * if this ever needs porting.
+	 */
+	if (ev->num_mem_reqs)
+		ath11k_warn(ab,
+			    "wmi service ready: firmware requests %d host memory chunk(s), ath11k provides none\n",
+			    ev->num_mem_reqs);
+
 	return 0;
 }
 

@@ -78,8 +78,29 @@ static const struct pwrseq_unit_data pwrseq_qcom_wcn_vddio_unit_data = {
 static int pwrseq_qcom_wcn_vregs_enable(struct pwrseq_device *pwrseq)
 {
 	struct pwrseq_qcom_wcn_ctx *ctx = pwrseq_device_get_drvdata(pwrseq);
+	int ret;
 
-	return regulator_bulk_enable(ctx->pdata->num_vregs, ctx->regs);
+	ret = regulator_bulk_enable(ctx->pdata->num_vregs, ctx->regs);
+	if (ret)
+		return ret;
+
+	/*
+	 * Stamp the rails coming up, so gpio_enable_delay_ms is honoured before
+	 * the *first* enable edge and not just between BT and WLAN.
+	 *
+	 * QCA6490 needs its inputs settled before WLAN_EN rises. The downstream
+	 * cnss driver does this explicitly and only for this chip: with BT_EN
+	 * low it logs "BT_EN_GPIO State: Off. Delay WLAN_GPIO enable" and sleeps
+	 * WLAN_ENABLE_DELAY (100 ms) between driving WLAN_EN low and raising it
+	 * -- 112 ms measured on a OnePlus 9RT. With BT_EN already high it skips
+	 * the wait, because the module's PMU is sequenced by then.
+	 *
+	 * Without this the counter starts at 0, jiffies - 0 is huge, and
+	 * ensure_gpio_delay() sleeps for nothing on the path that matters.
+	 */
+	ctx->last_gpio_enable_jf = jiffies;
+
+	return 0;
 }
 
 static int pwrseq_qcom_wcn_vregs_disable(struct pwrseq_device *pwrseq)
@@ -380,7 +401,8 @@ static const struct pwrseq_qcom_wcn_pdata pwrseq_wcn6855_of_data = {
 	.vregs = pwrseq_wcn6855_vregs,
 	.num_vregs = ARRAY_SIZE(pwrseq_wcn6855_vregs),
 	.pwup_delay_ms = 50,
-	.gpio_enable_delay_ms = 5,
+	/* 100 ms, matching cnss's WLAN_ENABLE_DELAY for QCA6490. */
+	.gpio_enable_delay_ms = 100,
 	.targets = pwrseq_qcom_wcn6855_targets,
 };
 

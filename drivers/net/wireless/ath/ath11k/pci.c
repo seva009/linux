@@ -1035,6 +1035,20 @@ static int ath11k_pci_probe(struct pci_dev *pdev,
 		ath11k_pci_read_hw_version(ab, &soc_hw_version_major,
 					   &soc_hw_version_minor);
 		switch (soc_hw_version_major) {
+		/*
+		 * The QCA6490 in the OnePlus 9RT reports major 1, not 2:
+		 * TCSR_SOC_HW_VERSION reads 0x400c0110, which the downstream cnss
+		 * driver logs as "major version: 0x1, minor version: 0x10" and
+		 * accepts as it stands. Minor 0x10/0x11 is the hw2.1 silicon
+		 * regardless of the major, so let it through to the same sub-version
+		 * discrimination below. The 0x00/0x01 hw2.0 mapping stays confined to
+		 * major 2, where it is the version that has actually been seen.
+		 */
+		case 1:
+			if (soc_hw_version_minor != 0x10 &&
+			    soc_hw_version_minor != 0x11)
+				goto unsupported_wcn6855_soc;
+			fallthrough;
 		case 2:
 			switch (soc_hw_version_minor) {
 			case 0x00:
